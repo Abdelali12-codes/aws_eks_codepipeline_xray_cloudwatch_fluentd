@@ -1,0 +1,495 @@
+eksctl create cluster \
+    --name my-cluster \
+    --version 1.22 \
+    --without-nodegroup \
+    --with-oidc \
+    --region eu-west-3
+
+
+kubectl annotate serviceaccount -n service-account-namespace service-account-name \
+eks.amazonaws.com/role-arn=arn:aws:iam::111122223333:role/iam-role-name
+
+eksctl delete cluster --name my-cluster
+
+
+
+
+--------------------------------------- aws ingress loadbalancer ------------------------
+
+curl -o iam_policy.json https://raw.githubusercontent.com/kubernetes-sigs/aws-load-balancer-controller/v2.4.1/docs/install/iam_policy.json
+
+aws iam create-policy \
+    --policy-name AWSLoadBalancerControllerIAMPolicy \
+    --policy-document file://iam_policy.json
+
+
+
+eksctl create iamserviceaccount \
+  --cluster=my-cluster \
+  --namespace=kube-system \
+  --name=aws-load-balancer-controller \
+  --role-name "AmazonEKSLoadBalancerControllerRole" \
+  --attach-policy-arn=arn:aws:iam::080266302756:policy/AWSLoadBalancerControllerIAMPolicy \
+  --override-existing-serviceaccounts \
+  --approve
+
+
+curl https://raw.githubusercontent.com/helm/helm/master/scripts/get-helm-3 > get_helm.sh
+chmod 700 get_helm.sh
+./get_helm.sh
+
+
+helm repo add eks https://aws.github.io/eks-charts
+
+helm repo update
+
+
+helm install aws-load-balancer-controller eks/aws-load-balancer-controller \
+  -n kube-system \
+  --set clusterName=my-cluster \
+  --set serviceAccount.create=false \
+  --set serviceAccount.name=aws-load-balancer-controller \
+  --set image.repository=602401143452.dkr.ecr.eu-west-3.amazonaws.com/amazon/aws-load-balancer-controller
+
+
+
+kubectl get deployment -n kube-system aws-load-balancer-controller
+
+helm uninstall aws-load-balancer-controller  -n kube-system
+
+kubectl annotate storageclass gp2 storageclass.kubernetes.io/is-default-class=true
+
+restricted access to the Amazon EC2 instance metadata service (IMDS)
+
+export KUBE_EDITOR=nano
+
+aws-auth
+
+- userarn: arn:aws:iam::080266302756:user/abdelali
+  username: abdelali
+  groups:
+  - abdelali
+
+
+eksctl get iamidentitymapping --cluster my-cluster --region=region-code
+
+eksctl create nodegroup --config-file=eks-course.yaml
+
+eksctl delete nodegroup -f cluster.yaml --include="ng-1" --approve
+
+
+kubectl scale --replicas=4 deployment/name
+
+kubectl -n kube-system logs deployment/name | grep -A "Expanding"
+
+
+ingress annotations
+ingress spec ingressclassname
+
+ingress spec (routing rules, default backend)
+
+
+
+
+AWS load balancer controller
+ ALB Ingress Controller
+
+
+add the below tags to your subnets that are used in creating eks cluster
+
+key: kubernetes.io/cluster/my-cluster
+value: shared
+
+
+for private subnets
+
+key: kubernetes.io/role/internal-elb
+value: 1
+
+for public subnets
+
+key: kubernetes.io/role/elb
+value: 1
+
+
+
+
+
+
+
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment
+  labels:
+    app: nginx
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+     containers:
+     - image: nginx
+       name: nginx
+      volumeMounts:
+      - mountPath: /usr/share/nginx/html
+        name: test-volume
+     volumes:
+     - name: test-volume
+    # This AWS EBS volume must already exist.
+       awsElasticBlockStore:
+        volumeID: "vol-07bb3e27006f725cc"
+        partition: 1
+        fsType: ext4
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-service
+  annotations:
+    alb.ingress.kubernetes.io/healthcheck-path: /app1/index.html
+spec:
+  type: NodePort
+  selector:
+    app: nginx
+  ports:
+    - port: 80
+      targetPort: 80
+      nodePort: 30007
+
+
+
+---
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pv-recycler
+  namespace: default
+spec:
+  restartPolicy: Never
+  volumes:
+  - name: vol
+    hostPath:
+      path: /any/path/it/will/be/replaced
+  containers:
+  - name: pv-recycler
+    image: "k8s.gcr.io/busybox"
+    command: ["/bin/sh", "-c", "test -e /scrub && rm -rf /scrub/..?* /scrub/.[!.]* /scrub/*  && test -z \"$(ls -A /scrub)\" || exit 1"]
+    volumeMounts:
+    - name: vol
+      mountPath: /scrub
+
+
+---
+
+# You can only expand a PVC if its storage class's allowVolumeExpansion field is set to true.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: gluster-vol-default
+provisioner: kubernetes.io/glusterfs
+parameters:
+  resturl: "http://192.168.10.100:8080"
+  restuser: ""
+  secretNamespace: ""
+  secretName: ""
+allowVolumeExpansion: true
+
+
+
+
+
+
+
+
+
+--------------------------------------- auto scaler ----------------------------------------
+
+
+
+auto scale policy
+
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "VisualEditor0",
+            "Effect": "Allow",
+            "Action": [
+                "autoscaling:SetDesiredCapacity",
+                "autoscaling:TerminateInstanceInAutoScalingGroup"
+            ],
+            "Resource": "*",
+            "Condition": {
+                "StringEquals": {
+                    "aws:ResourceTag/k8s.io/cluster-autoscaler/<my-cluster>": "owned"
+                }
+            }
+        },
+        {
+            "Sid": "VisualEditor1",
+            "Effect": "Allow",
+            "Action": [
+                "autoscaling:DescribeAutoScalingInstances",
+                "autoscaling:DescribeAutoScalingGroups",
+                "ec2:DescribeLaunchTemplateVersions",
+                "autoscaling:DescribeTags",
+                "autoscaling:DescribeLaunchConfigurations"
+            ],
+            "Resource": "*"
+        }
+    ]
+}
+
+
+create policy
+
+aws iam create-policy \
+    --policy-name AmazonEKSClusterAutoscalerPolicy \
+    --policy-document file://cluster-autoscaler-policy.json
+
+
+
+create service account
+
+eksctl create iamserviceaccount \
+  --cluster=my-cluster \
+  --namespace=kube-system \
+  --name=cluster-autoscaler \
+  --attach-policy-arn=arn:aws:iam::080266302756:policy/AmazonEKSClusterAutoscalerPolicy \
+  --role-name "AmazonEKSClusterAutoscalerRole" \
+  --override-existing-serviceaccounts \
+  --approve
+
+deploy auto-scaler
+
+curl -o cluster-autoscaler-autodiscover.yaml https://raw.githubusercontent.com/kubernetes/autoscaler/master/cluster-autoscaler/cloudprovider/aws/examples/cluster-autoscaler-autodiscover.yaml
+
+
+kubectl patch deployment cluster-autoscaler \
+  -n kube-system \
+  -p '{"spec":{"template":{"metadata":{"annotations":{"cluster-autoscaler.kubernetes.io/safe-to-evict": "false"}}}}}'
+
+
+kubectl -n kube-system edit deployment.apps/cluster-autoscaler
+
+
+    spec:
+      containers:
+      - command
+        - ./cluster-autoscaler
+        - --v=4
+        - --stderrthreshold=info
+        - --cloud-provider=aws
+        - --skip-nodes-with-local-storage=false
+        - --expander=least-waste
+        - --node-group-auto-discovery=asg:tag=k8s.io/cluster-autoscaler/enabled,k8s.io/cluster-autoscaler/<YOUR CLUSTER NAME>
+        - --balance-similar-node-groups
+        - --skip-nodes-with-system-pods=false
+
+
+kubectl set image deployment cluster-autoscaler \
+  -n kube-system \
+  cluster-autoscaler=k8s.gcr.io/autoscaling/cluster-autoscaler:v1.21.0>
+
+
+
+
+---------------------------- external-dns ------------------------------------
+
+
+create policy
+
+
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "route53:ChangeResourceRecordSets"
+      ],
+      "Resource": [
+        "arn:aws:route53:::hostedzone/*"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "route53:ListHostedZones",
+        "route53:ListResourceRecordSets"
+      ],
+      "Resource": [
+        "*"
+      ]
+    }
+  ]
+}
+
+
+aws iam create-policy \
+    --policy-name AmazonEKSClusterExternalDns \
+    --policy-document file://external-dns.json
+
+
+
+eksctl create iamserviceaccount \
+  --cluster=my-cluster \
+  --namespace=default \
+  --name=external-dns \
+  --attach-policy-arn=arn:aws:iam::080266302756:policy/AmazonEKSClusterExternalDns \
+  --role-name "AmazonEKSClusterExternalDnsRole" \
+  --override-existing-serviceaccounts \
+  --approve
+
+
+
+deployment, RBAC
+
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: external-dns
+rules:
+- apiGroups: [""]
+  resources: ["services","endpoints","pods"]
+  verbs: ["get","watch","list"]
+- apiGroups: ["extensions","networking.k8s.io"]
+  resources: ["ingresses"]
+  verbs: ["get","watch","list"]
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["list","watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: external-dns-viewer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: external-dns
+subjects:
+- kind: ServiceAccount
+  name: external-dns
+  namespace: default
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: external-dns
+spec:
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: external-dns
+  template:
+    metadata:
+      labels:
+        app: external-dns
+    spec:
+      serviceAccountName: external-dns
+      containers:
+      - name: external-dns
+        image: k8s.gcr.io/external-dns/external-dns:v0.11.0
+        args:
+        - --source=service
+        - --source=ingress
+        - --domain-filter=abdelalitraining.com # will make ExternalDNS see only the hosted zones matching provided domain, omit to process all available hosted zones
+        - --provider=aws
+       # - --policy=upsert-only # would prevent ExternalDNS from deleting any records, omit to enable full synchronization
+        - --aws-zone-type=public # only look at public hosted zones (valid values are public, private or no value for both)
+        - --registry=txt
+        - --txt-owner-id=my-hostedzone-identifier
+      securityContext:
+        fsGroup: 65534 # For ExternalDNS to be able to read Kubernetes and AWS token files
+
+
+----------------------------------- csi ebs driver ----------------------------------------------------
+
+
+----------------------------------- csi efs driver ----------------------------------------------------
+
+
+----------------------------------- csi snapshot driver ----------------------------------------------------
+
+
+--------------------------------- eks fargate --------------------------------------
+
+eksctl get fargateprofile --cluster my-cluster
+
+create namespace that the fargate profile will reside within it
+
+eksctl create profile fargateprofile --cluster my-cluster \
+                                     -- name profile-name
+                                     -- namespace default
+
+eksctl delete fargateprofile --cluster my-cluster --name fp-dev --wait
+
+
+----------------- create namespace for fargateprofile --------------------
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ns-ums
+
+
+
+
+------------------ external service ----------------
+apiVersion: v1
+kind: Service
+metadata:
+
+   name: mysql
+   labels:
+     runon: fargate
+   namespace: ns-app3
+   
+spec:
+
+  type: ExternalName
+  externalName: endpoint
+    
+
+
+
+----------------- aws devops tools -----------------
+
+.gitconfig
+
+[credential]
+     helper = !aws codecommit credential-helper $@
+     UseHttpPath = true
+    
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

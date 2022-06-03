@@ -1,0 +1,23 @@
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+metadata:
+   name: my-cluster
+   region: eu-west-3
+
+fargateProfiles:
+
+   - name: fp-app2
+     selectors:
+        
+         - namepsace: ns-app2
+
+
+
+   - name: fp-app3
+     selectors:
+      # All workloads in the "ns-app3" kubernetes namespace mathcing
+      # the following label selectors will be scheduled to fargate
+      - namespace: ns-app3
+        labels:
+           runon: fargate
+       

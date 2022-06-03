@@ -1,0 +1,85 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flask-deployment
+  labels:
+    app: flask
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: flask
+  template:
+    metadata:
+      labels:
+        app: flask
+    spec:
+     containers:
+     - image: CONTAINER_IMAGE
+       name: flask
+       env:
+          - name: XRAY_ADDRESS
+            value: xray-service.default:2000
+      
+          - name: MYSQL_HOST
+            value: xxxxxxxxxxxxxxxxxxxxxx.eu-west-3.rds.amazonaws.com #amazon rds endpoint
+ 
+          - name: MYSQL_USER
+            valueFrom: 
+              secretKeyRef:
+                  name: mysql-secret
+                  key: mysql_user
+
+          - name: MYSQL_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                  name: mysql-secret
+                  key: mysql_password
+
+          - name: MYSQL_DB
+            valueFrom:
+              secretKeyRef:
+                  name: mysql-secret
+                  key: mysql_db
+       ports:
+       - containerPort: 5000
+     #  resources:
+     #     requests:
+     #       memory: "128Mi"
+     #       cpu: "100m"
+     #     limits:
+     #       memory: "500Mi"
+     #       cpu: "200m"   
+
+    #   volumeMounts:
+    #   - mountPath: /usr/share/nginx/html
+    #     name: test-volume
+    # volumes:
+    # - name: test-volume
+    # This AWS EBS volume must already exist.
+    #   awsElasticBlockStore:
+    #    volumeID: "vol-07bb3e27006f725cc"
+    #    partition: 1
+    #    fsType: ext4
+    #   persistentVolumeClaim:
+    #    claimName: ebs-claim
+
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: flask-service
+ # annotations: 
+ #  external-dns.alpha.kubernetes.io/hostname: ekslab.abdelalitraining.com
+spec:
+  type: NodePort
+
+ # type: LoadBalancer
+  selector:
+    app: flask
+  ports:
+    - port: 5000
+      targetPort: 5000
+      nodePort: 30009

@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment
+  labels:
+    app: nginx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nginx
+ # strategy:
+ #     type: RollingUpdate
+ #     rollingUpdate:
+ #        maxSurge: 0
+ #        maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+     containers:
+     - image: CONTAINER_IMAGE
+       name: nginx
+    #   volumeMounts:
+    #   - mountPath: /usr/share/nginx/html
+    #     name: test-volume
+    # volumes:
+    # - name: test-volume
+    # This AWS EBS volume must already exist.
+    #   awsElasticBlockStore:
+    #    volumeID: "vol-07bb3e27006f725cc"
+    #    partition: 1
+    #    fsType: ext4
+    #   persistentVolumeClaim:
+    #    claimName: ebs-claim
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-service
+ # annotations: 
+ #  external-dns.alpha.kubernetes.io/hostname: ekslab.abdelalitraining.com
+spec:
+  type: NodePort
+
+ # type: LoadBalancer
+  selector:
+    app: nginx
+  ports:
+    - port: 80
+      targetPort: 80
+      nodePort: 30007
+

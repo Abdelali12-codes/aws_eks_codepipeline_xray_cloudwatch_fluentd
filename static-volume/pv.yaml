@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: test-pv
+spec:
+  accessModes:
+  - ReadWriteOnce
+  volumeMode: Filesystem
+  capacity:
+    storage: 5Gi
+  csi:
+    driver: ebs.csi.aws.com
+    volumeHandle: vol-07bb3e27006f725cc
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: topology.ebs.csi.aws.com/zone
+              operator: In
+              values:
+                - eu-west-3a

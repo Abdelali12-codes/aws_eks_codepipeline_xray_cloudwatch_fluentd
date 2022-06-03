@@ -1,0 +1,1099 @@
+eksctl create cluster \
+    --name my-cluster \
+    --version 1.22 \
+    --without-nodegroup \
+    --with-oidc \
+    --region eu-west-3
+
+
+kubectl annotate serviceaccount -n service-account-namespace service-account-name \
+eks.amazonaws.com/role-arn=arn:aws:iam::111122223333:role/iam-role-name
+
+eksctl delete cluster --name my-cluster
+
+
+
+
+kubectl annotate storageclass gp2 storageclass.kubernetes.io/is-default-class=true
+
+restricted access to the Amazon EC2 instance metadata service (IMDS)
+
+export KUBE_EDITOR=nano
+
+aws-auth
+
+- userarn: arn:aws:iam::080266302756:user/abdelali
+  username: abdelali
+  groups:
+  - abdelali
+
+
+eksctl get iamidentitymapping --cluster my-cluster --region=region-code
+
+eksctl create nodegroup --config-file=eks-course.yaml
+
+eksctl delete nodegroup -f cluster.yaml --include="ng-1" --approve
+
+
+kubectl scale --replicas=4 deployment/name
+
+kubectl -n kube-system logs deployment/name | grep -A "Expanding"
+
+
+ingress annotations
+ingress spec ingressclassname
+
+ingress spec (routing rules, default backend)
+
+
+
+
+AWS load balancer controller
+ ALB Ingress Controller
+
+
+add the below tags to your subnets that are used in creating eks cluster
+
+key: kubernetes.io/cluster/my-cluster
+value: shared
+
+
+for private subnets
+
+key: kubernetes.io/role/internal-elb
+value: 1
+
+for public subnets
+
+key: kubernetes.io/role/elb
+value: 1
+
+
+
+
+
+
+--------------------------------------- aws ingress loadbalancer ------------------------
+
+curl -o iam_policy.json https://raw.githubusercontent.com/kubernetes-sigs/aws-load-balancer-controller/v2.4.1/docs/install/iam_policy.json
+
+aws iam create-policy \
+    --policy-name AWSLoadBalancerControllerIAMPolicy \
+    --policy-document file://iam_policy.json
+
+
+
+eksctl create iamserviceaccount \
+  --cluster=my-cluster \
+  --namespace=kube-system \
+  --name=aws-load-balancer-controller \
+  --role-name "AmazonEKSLoadBalancerControllerRole" \
+  --attach-policy-arn=arn:aws:iam::080266302756:policy/AWSLoadBalancerControllerIAMPolicy \
+  --override-existing-serviceaccounts \
+  --approve
+
+
+curl https://raw.githubusercontent.com/helm/helm/master/scripts/get-helm-3 > get_helm.sh
+chmod 700 get_helm.sh
+./get_helm.sh
+
+
+helm repo add eks https://aws.github.io/eks-charts
+
+helm repo update
+
+
+helm install aws-load-balancer-controller eks/aws-load-balancer-controller \
+  -n kube-system \
+  --set clusterName=my-cluster \
+  --set serviceAccount.create=false \
+  --set serviceAccount.name=aws-load-balancer-controller \
+  --set image.repository=602401143452.dkr.ecr.eu-west-3.amazonaws.com/amazon/aws-load-balancer-controller
+
+
+
+
+kubectl get deployment -n kube-system aws-load-balancer-controller
+
+helm uninstall aws-load-balancer-controller  -n kube-system
+
+
+
+---------------------------- external-dns ------------------------------------
+
+
+create policy
+
+
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "route53:ChangeResourceRecordSets"
+      ],
+      "Resource": [
+        "arn:aws:route53:::hostedzone/*"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "route53:ListHostedZones",
+        "route53:ListResourceRecordSets"
+      ],
+      "Resource": [
+        "*"
+      ]
+    }
+  ]
+}
+
+
+aws iam create-policy \
+    --policy-name AmazonEKSClusterExternalDns \
+    --policy-document file://external-dns.json
+
+
+
+eksctl create iamserviceaccount \
+  --cluster=my-cluster \
+  --namespace=default \
+  --name=external-dns \
+  --attach-policy-arn=arn:aws:iam::080266302756:policy/AmazonEKSClusterExternalDns \
+  --role-name "AmazonEKSClusterExternalDnsRole" \
+  --override-existing-serviceaccounts \
+  --approve
+
+
+
+deployment, RBAC
+
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: external-dns
+rules:
+- apiGroups: [""]
+  resources: ["services","endpoints","pods"]
+  verbs: ["get","watch","list"]
+- apiGroups: ["extensions","networking.k8s.io"]
+  resources: ["ingresses"]
+  verbs: ["get","watch","list"]
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["list","watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: external-dns-viewer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: external-dns
+subjects:
+- kind: ServiceAccount
+  name: external-dns
+  namespace: default
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: external-dns
+spec:
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: external-dns
+  template:
+    metadata:
+      labels:
+        app: external-dns
+    spec:
+      serviceAccountName: external-dns
+      containers:
+      - name: external-dns
+        image: k8s.gcr.io/external-dns/external-dns:v0.11.0
+        args:
+        - --source=service
+        - --source=ingress
+        - --domain-filter=abdelalitraining.com # will make ExternalDNS see only the hosted zones matching provided domain, omit to process all available hosted zones
+        - --provider=aws
+       # - --policy=upsert-only # would prevent ExternalDNS from deleting any records, omit to enable full synchronization
+        - --aws-zone-type=public # only look at public hosted zones (valid values are public, private or no value for both)
+        - --registry=txt
+        - --txt-owner-id=my-hostedzone-identifier
+      securityContext:
+        fsGroup: 65534 # For ExternalDNS to be able to read Kubernetes and AWS token files
+
+
+kubectl apply -f rbac-deployment-external-dns.yaml
+
+
+
+-------------------------------- deployment services --------------------------
+
+
+
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment
+  labels:
+    app: nginx
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+     containers:
+     - image: nginx
+       name: nginx
+      volumeMounts:
+      - mountPath: /usr/share/nginx/html
+        name: test-volume
+     volumes:
+     - name: test-volume
+    # This AWS EBS volume must already exist.
+       awsElasticBlockStore:
+        volumeID: "vol-07bb3e27006f725cc"
+        partition: 1
+        fsType: ext4
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-service
+  annotations:
+    alb.ingress.kubernetes.io/healthcheck-path: /app1/index.html
+spec:
+  type: NodePort
+  selector:
+    app: nginx
+  ports:
+    - port: 80
+      targetPort: 80
+      nodePort: 30007
+
+
+
+---
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pv-recycler
+  namespace: default
+spec:
+  restartPolicy: Never
+  volumes:
+  - name: vol
+    hostPath:
+      path: /any/path/it/will/be/replaced
+  containers:
+  - name: pv-recycler
+    image: "k8s.gcr.io/busybox"
+    command: ["/bin/sh", "-c", "test -e /scrub && rm -rf /scrub/..?* /scrub/.[!.]* /scrub/*  && test -z \"$(ls -A /scrub)\" || exit 1"]
+    volumeMounts:
+    - name: vol
+      mountPath: /scrub
+
+
+---
+
+# You can only expand a PVC if its storage class's allowVolumeExpansion field is set to true.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: gluster-vol-default
+provisioner: kubernetes.io/glusterfs
+parameters:
+  resturl: "http://192.168.10.100:8080"
+  restuser: ""
+  secretNamespace: ""
+  secretName: ""
+allowVolumeExpansion: true
+
+
+
+
+
+
+
+
+
+--------------------------------------- auto scaler ----------------------------------------
+
+
+
+auto scale policy
+
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "VisualEditor0",
+            "Effect": "Allow",
+            "Action": [
+                "autoscaling:SetDesiredCapacity",
+                "autoscaling:TerminateInstanceInAutoScalingGroup"
+            ],
+            "Resource": "*",
+            "Condition": {
+                "StringEquals": {
+                    "aws:ResourceTag/k8s.io/cluster-autoscaler/my-cluster": "owned"
+                }
+            }
+        },
+        {
+            "Sid": "VisualEditor1",
+            "Effect": "Allow",
+            "Action": [
+                "autoscaling:DescribeAutoScalingInstances",
+                "autoscaling:DescribeAutoScalingGroups",
+                "ec2:DescribeLaunchTemplateVersions",
+                "autoscaling:DescribeTags",
+                "autoscaling:DescribeLaunchConfigurations"
+            ],
+            "Resource": "*"
+        }
+    ]
+}
+
+
+create policy
+
+aws iam create-policy \
+    --policy-name AmazonEKSClusterAutoscalerPolicy \
+    --policy-document file://cluster-autoscaler-policy.json
+
+
+
+create service account
+
+eksctl create iamserviceaccount \
+  --cluster=my-cluster \
+  --namespace=kube-system \
+  --name=cluster-autoscaler \
+  --attach-policy-arn=arn:aws:iam::080266302756:policy/AmazonEKSClusterAutoscalerPolicy \
+  --role-name "AmazonEKSClusterAutoscalerRole" \
+  --override-existing-serviceaccounts \
+  --approve
+
+deploy auto-scaler
+
+curl -o cluster-autoscaler-autodiscover.yaml https://raw.githubusercontent.com/kubernetes/autoscaler/master/cluster-autoscaler/cloudprovider/aws/examples/cluster-autoscaler-autodiscover.yaml
+
+
+kubectl patch deployment cluster-autoscaler \
+  -n kube-system \
+  -p '{"spec":{"template":{"metadata":{"annotations":{"cluster-autoscaler.kubernetes.io/safe-to-evict": "false"}}}}}'
+
+
+kubectl -n kube-system edit deployment.apps/cluster-autoscaler
+
+
+    spec:
+      containers:
+      - command
+        - ./cluster-autoscaler
+        - --v=4
+        - --stderrthreshold=info
+        - --cloud-provider=aws
+        - --skip-nodes-with-local-storage=false
+        - --expander=least-waste
+        - --node-group-auto-discovery=asg:tag=k8s.io/cluster-autoscaler/enabled,k8s.io/cluster-autoscaler/my-cluster
+        - --balance-similar-node-groups
+        - --skip-nodes-with-system-pods=false
+
+
+kubectl set image deployment cluster-autoscaler \
+  -n kube-system \
+  cluster-autoscaler=k8s.gcr.io/autoscaling/cluster-autoscaler:v1.21.0
+
+
+* add this section to the deployment file
+
+resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "500Mi"
+            cpu: "200m" 
+
+
+
+kubectl autoscale deployment nginx-deployment --cpu-percent=50 --min=1 --max=10
+
+# Generate Load
+kubectl run apache-bench -i --tty --rm --image=httpd -- ab -n 500000 -c 1000 http://nginx-service.default.svc.cluster.local/ 
+
+
+
+
+
+----------------------------------- csi ebs driver ----------------------------------------------------
+curl -o ebs-csi-policy.json https://raw.githubusercontent.com/kubernetes-sigs/aws-ebs-csi-driver/v1.0.0/docs/example-iam-policy.json
+
+aws iam create-policy \
+ --policy-name AmazonEKS_EBS_CSI_Driver_Policy \
+ --policy-document file://ebs-csi-policy.json
+
+
+
+eksctl create iamserviceaccount \
+ --name ebs-csi-controller-sa \
+ --namespace kube-system \
+ --cluster my-cluster \
+ --attach-policy-arn arn:aws:iam::080266302756:policy/AmazonEKS_EBS_CSI_Driver_Policy \
+ --role-name "AmazonEKSClusterEBSCSI" \
+ --approve \
+ --override-existing-serviceaccounts
+
+
+
+helm repo add aws-ebs-csi-driver https://kubernetes-sigs.github.io/aws-ebs-csi-driver
+helm repo update
+
+helm upgrade --install aws-ebs-csi-driver aws-ebs-csi-driver/aws-ebs-csi-driver \
+ --namespace kube-system \
+ --set enableVolumeResizing=true \
+ --set enableVolumeSnapshot=true \
+ --set controller.serviceAccount.create=false \
+ --set controller.serviceAccount.name=ebs-csi-controller-sa
+
+helm uninstall aws-ebs-csi-driver  -n kube-system
+
+----------------------------------- csi efs driver ----------------------------------------------------
+
+curl -o efs-csi-policy.json https://raw.githubusercontent.com/kubernetes-sigs/aws-efs-csi-driver/v1.2.0/docs/iam-policy-example.json
+
+aws iam create-policy \
+ --policy-name AmazonEKS_EFS_CSI_Driver_Policy \
+ --policy-document file://efs-csi-policy.json
+
+
+
+eksctl create iamserviceaccount \
+ --name efs-csi-controller-sa \
+ --namespace kube-system \
+ --cluster <cluster-name> \
+ --attach-policy-arn arn:aws:iam::080266302756:policy/AmazonEKS_EFS_CSI_Driver_Policy \
+ --approve \
+ --override-existing-serviceaccounts \
+ --region us-west-2
+
+
+helm repo add aws-efs-csi-driver https://kubernetes-sigs.github.io/aws-efs-csidriver/
+
+
+helm repo update
+
+
+helm upgrade -i aws-efs-csi-driver aws-efs-csi-driver/aws-efs-csi-driver \
+ --namespace kube-system \
+ --set image.repository=602401143452.dkr.ecr.eu-west-3.amazonaws.com/eks/aws-efscsi-driver \
+ --set serviceAccount.controller.create=false \
+ --set serviceAccount.controller.name=efs-csi-controller-sa
+
+
+----------------------------------- csi snapshot driver ----------------------------------------------------
+
+
+--------------------------------- eks fargate --------------------------------------
+
+eksctl get fargateprofile --cluster my-cluster
+
+create namespace that the fargate profile will reside within it
+
+eksctl create profile fargateprofile --cluster my-cluster \
+                                     -- name profile-name
+                                     -- namespace default
+
+eksctl delete fargateprofile --cluster my-cluster --name fp-dev --wait
+
+
+----------------- create namespace for fargateprofile --------------------
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ns-ums
+
+
+
+
+------------------ external service ----------------
+apiVersion: v1
+kind: Service
+metadata:
+
+   name: mysql
+   labels:
+     runon: fargate
+   namespace: ns-app3
+   
+spec:
+
+  type: ExternalName
+  externalName: endpoint
+    
+
+
+
+----------------- aws devops tools -----------------
+
+.gitconfig
+
+[credential]
+     helper = !aws codecommit credential-helper $@
+     UseHttpPath = true
+    
+
+------- aws codebuild role to interact with eks cluster ------------
+
+*.  trust policy 
+
+
+{
+    "Version": "2012-10-17",
+    "Statement": {
+        "Effect": "Allow",
+        "Principal": { "AWS": "arn:aws:iam::080266302756:root" },
+        "Action": "sts:AssumeRole"
+    }
+}
+
+
+aws iam create-role --role-name aws-eks-codebuild-role --assume-role-policy-document file://aws-role-trust-policy.json
+
+* create plocies for aws role 
+
+{ 
+ "Version": "2012-10-17",
+ "Statement": [ 
+     { 
+       "Effect": "Allow",
+       "Action": "eks:Describe*", 
+       "Resource": "*" 
+     } 
+    ] 
+}
+
+
+aws iam create-policy --policy-name aws-eks-codebuild-policy --policy-document file://aws-eks-codebuild-policy.json
+
+* attach create policy to the aws role
+
+aws iam attach-role-policy --role-name aws-eks-codebuild-role --policy-arn "arn:aws:iam::080266302756:policy/aws-eks-codebuild-policy"
+
+
+
+* create an iam policy to allow aws codebuild to assume the role that allow of describing eks
+
+{
+  "Version": "2012-10-17",
+  "Statement": {
+    "Effect": "Allow",
+    "Action": "sts:AssumeRole",
+    "Resource": "arn:aws:iam::080266302756:role/aws-eks-codebuild-role"
+  }
+}
+
+
+
+aws iam create-policy --policy-name aws-codebuild-assume-role-policy --policy-document file://aws-codebuild-assume-role-policy.json
+
+* to delete existing policy
+
+aws iam delete-policy --policy-arn arn:aws:iam::080266302756:policy/aws-codebuild-assume-role
+
+* attach the above policy to the role that will be created by aws codebuild
+
+
+
+
+
+* create policy
+
+
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "ec2:Describe*",
+                "iam:ListRoles",
+                "sts:AssumeRole"
+            ],
+            "Resource": "*"
+        }
+    ]
+}
+
+
+aws iam attach-user-policy --user-name Bob --policy-arn "arn:aws:iam::080266302756:policy/example-policy"
+
+aws iam attach-role-policy --role-name aws-eks-codebuild-role --policy-arn "arn:aws:iam::080266302756:policy/AWSCodeBuildAccess"
+
+
+
+* mapping aws codebuild role in aws-auth configmap of the cluster
+
+1. create clusterole and clusterrolebinding
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: eks-console-dashboard-full-access-clusterrole
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - nodes
+  - namespaces
+  - pods
+  verbs:
+  - get
+  - list
+- apiGroups:
+  - apps
+  resources:
+  - deployments
+  - daemonsets
+  - statefulsets
+  - replicasets
+  verbs:
+  - get
+  - list
+- apiGroups:
+  - batch
+  resources:
+  - jobs
+  verbs:
+  - get
+  - list
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: eks-console-dashboard-full-access-binding
+subjects:
+- kind: Group
+  name: ekscodebuild
+  apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: ClusterRole
+  name: eks-console-dashboard-full-access-clusterrole
+  apiGroup: rbac.authorization.k8s.io
+
+
+2. map the role
+2.1. run the follow command:
+
+kubectl get configmap/aws-auth -n kube-system -o yaml > aws-auth.yaml
+
+
+edit the aws-auth.yaml file by adding the below lines
+
+
+- groups:
+      - ekscodebuild
+      rolearn: arn:aws:iam::080266302756:role/aws-eks-codebuild-role
+      username: codebuild
+
+
+
+-------------------- aws sts ------------------- 
+
+update-kubeconfig command
+
+This command constructs a configuration with prepopulated server and certificate authority data values 
+for a specified cluster. You can specify an IAM role ARN with the --role-arn option to
+use for authentication when you issue kubectl commands. Otherwise, 
+the IAM entity in your default AWS CLI or SDK credential chain is used. 
+You can view your default AWS CLI or SDK identity by running the
+
+aws sts get-caller-identity
+
+------ aws codebuild with eks ------------------
+
+
+
+
+* export those variables in aws codebuild
+
+
+REPOSITORY_URI = 180789647333.dkr.ecr.us-east-1.amazonaws.com/eks-devops-nginx
+
+EKS_KUBECTL_ROLE_ARN = arn:aws:iam::080266302756:role/aws-eks-codebuild-role
+EKS_CLUSTER_NAME = my-cluster
+
+
+version: 0.2
+phases:
+  install:
+    commands:
+      - echo "Install Phase - Nothing to do using latest Amazon Linux Docker Image for CodeBuild which has all AWS Tools - https://github.com/aws/aws-codebuild-docker-images/blob/master/al2/x86_64/standard/3.0/Dockerfile"
+  pre_build:
+      commands:
+        # Docker Image Tag with Date Time & Code Buiild Resolved Source Version
+        - TAG="$(date +%Y-%m-%d.%H.%M.%S).$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | head -c 8)"
+        # Update Image tag in our Kubernetes Deployment Manifest        
+        - echo "Update Image tag in kube-manifest..."
+        - sed -i 's@CONTAINER_IMAGE@'"$REPOSITORY_URI:$TAG"'@' kube-manifests/01-DEVOPS-Nginx-Deployment.yml
+        # Verify AWS CLI Version        
+        - echo "Verify AWS CLI Version..."
+        - aws --version
+        # Login to ECR Registry for docker to push the image to ECR Repository
+        - echo "Login in to Amazon ECR..."
+        - $(aws ecr get-login --no-include-email)
+        # Update Kube config Home Directory
+        - export KUBECONFIG=$HOME/.kube/config
+  build:
+    commands:
+      # Build Docker Image
+      - echo "Build started on `date`"
+      - echo "Building the Docker image..."
+      - docker build --tag $REPOSITORY_URI:$TAG .
+  post_build:
+    commands:
+      # Push Docker Image to ECR Repository
+      - echo "Build completed on `date`"
+      - echo "Pushing the Docker image to ECR Repository"
+      - docker push $REPOSITORY_URI:$TAG
+      - echo "Docker Image Push to ECR Completed -  $REPOSITORY_URI:$TAG"    
+      # Extracting AWS Credential Information using STS Assume Role for kubectl
+      - echo "Setting Environment Variables related to AWS CLI for Kube Config Setup"          
+      - CREDENTIALS=$(aws sts assume-role --role-arn $EKS_KUBECTL_ROLE_ARN --role-session-name codebuild-kubectl --duration-seconds 900)
+      - export AWS_ACCESS_KEY_ID="$(echo ${CREDENTIALS} | jq -r '.Credentials.AccessKeyId')"
+      - export AWS_SECRET_ACCESS_KEY="$(echo ${CREDENTIALS} | jq -r '.Credentials.SecretAccessKey')"
+      - export AWS_SESSION_TOKEN="$(echo ${CREDENTIALS} | jq -r '.Credentials.SessionToken')"
+      - export AWS_EXPIRATION=$(echo ${CREDENTIALS} | jq -r '.Credentials.Expiration')
+      # Setup kubectl with our EKS Cluster              
+      - echo "Update Kube Config"      
+      - aws eks update-kubeconfig --name $EKS_CLUSTER_NAME
+      # Apply changes to our Application using kubectl
+      - echo "Apply changes to kube manifests"            
+      - kubectl apply -f kube-manifests/
+      - echo "Completed applying changes to Kubernetes Objects"           
+      # Create Artifacts which we can use if we want to continue our pipeline for other stages
+      - printf '[{"name":"01-DEVOPS-Nginx-Deployment.yml","imageUri":"%s"}]' $REPOSITORY_URI:$TAG > build.json
+      # Additional Commands to view your credentials      
+      #- echo "Credentials Value is..  ${CREDENTIALS}"      
+      #- echo "AWS_ACCESS_KEY_ID...  ${AWS_ACCESS_KEY_ID}"            
+      #- echo "AWS_SECRET_ACCESS_KEY...  ${AWS_SECRET_ACCESS_KEY}"            
+      #- echo "AWS_SESSION_TOKEN...  ${AWS_SESSION_TOKEN}"            
+      #- echo "AWS_EXPIRATION...  $AWS_EXPIRATION"             
+      #- echo "EKS_CLUSTER_NAME...  $EKS_CLUSTER_NAME"             
+artifacts:
+  files: 
+    - build.json   
+    - kube-manifests/*
+
+
+
+The resulting kubeconfig is created as a new file or merged with an existing kubeconfig file using the following logic:
+
+1. If you specify a path with the --kubeconfig option, then the resulting configuration file is created there or merged with an existing kubeconfig at that location.
+2. Or, if you have the KUBECONFIG environment variable set, then the resulting configuration file is created at the first entry in that variable or merged with an existing kubeconfig at that location.
+3. Otherwise, by default, the resulting configuration file is created at the default kubeconfig path (.kube/config) in your home directory or merged with an existing kubeconfig at that location.
+4. If a previous cluster configuration exists for an Amazon EKS cluster with the same name at the specified path, the existing configuration is overwritten with the new configuration.
+
+When update-kubeconfig writes a configuration to a kubeconfig file, the current-context of the kubeconfig file is set to that configuration.
+You can use the --dry-run option to print the resulting configuration to stdout instead of writing it to the specified location.
+
+
+
+--name (string) The name of the cluster for which to create a kubeconfig entry. This cluster must exist in your account and in the specified or configured default Region for your AWS CLI installation
+
+
+
+
+
+
+
+
+------------------- mapping the role of the codebuild in aws-auth configmap ------------------------
+
+
+
+----------------- aws x-ray and eks -------------------------------
+
+create a policy 
+
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "xray:PutTraceSegments",
+                "xray:PutTelemetryRecords"
+            ],
+            "Resource": [
+                "*"
+            ]
+        }
+    ]
+}
+
+aws iam create-policy --policy-name AmazonEKS_XRAY_POLICY --policy-document file://aws-eks-xray-policy.json
+
+
+create service account
+
+
+
+eksctl create iamserviceaccount \
+ --name xray-daemon-sa \
+ --namespace default \
+ --cluster my-cluster \
+ --attach-policy-arn arn:aws:iam::080266302756:policy/AmazonEKS_XRAY_POLICY \
+ --role-name "AmazonEKSXRAYRole" \
+ --approve \
+ --override-existing-serviceaccounts \
+ --region eu-west-3
+
+
+
+
+
+create manifest
+
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  labels:
+    app: xray-daemon-sa
+  name: xray-daemon-sa
+  namespace: default
+  # Update IAM Role ARN created for X-Ray access
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::080266302756:role/AmazonEKSXRAYRole
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: xray-daemon
+  namespace: default
+spec:
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app: xray-daemon
+  template:
+    metadata:
+      labels:
+        app: xray-daemon
+    spec:
+      serviceAccountName: xray-daemon-sa
+      volumes:
+        - name: config-volume
+          configMap:
+            name: "xray-config"
+      containers:
+        - name: xray-daemon
+          image: amazon/aws-xray-daemon:3.2.0
+          command: ["/usr/bin/xray", "-c", "/aws/xray/config.yaml"]
+          resources:
+            requests:
+              cpu: 256m
+              memory: 32Mi
+            limits:
+              cpu: 512m
+              memory: 64Mi
+          ports:
+            - name: xray-ingest
+              containerPort: 2000
+              hostPort: 2000
+              protocol: UDP
+            - name: xray-tcp
+              containerPort: 2000
+              hostPort: 2000
+              protocol: TCP
+          volumeMounts:
+            - name: config-volume
+              mountPath: /aws/xray
+              readOnly: true
+---
+# Configuration for AWS X-Ray daemon
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: xray-config
+  namespace: default
+data:
+  config.yaml: |-
+    TotalBufferSizeMB: 24
+    Socket:
+      UDPAddress: "0.0.0.0:2000"
+      TCPAddress: "0.0.0.0:2000"
+    Version: 2
+---
+# k8s service definition for AWS X-Ray daemon headless service
+apiVersion: v1
+kind: Service
+metadata:
+  name: xray-service
+  namespace: default
+spec:
+  selector:
+    app: xray-daemon
+  clusterIP: None
+  ports:
+    - name: xray-ingest
+      port: 2000
+      protocol: UDP
+    - name: xray-tcp
+      port: 2000
+      protocol: TCP
+
+
+
+
+---------------- HPA ---------------------------------
+
+
+
+prequisites:
+
+install metrics server on the kubernetes cluster because Pod Autoscaler requires metrics resources
+
+
+kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/download/v0.6.1/components.yaml
+
+
+kubectl autoscale deployment deployment-demo --cpu-percent=50 --min=1 --max=5
+
+
+--------- eks cloudwatch agent ----------------------
+
+create policy for the cloudwatch agent
+
+CloudWatchAgentServicePolicy
+
+1. create namespace 
+
+kubectl apply -f https://raw.githubusercontent.com/aws-samples/amazon-cloudwatch-container-insights/latest/k8s-deployment-manifest-templates/deployment-mode/daemonset/container-insights-monitoring/cloudwatch-namespace.yaml
+
+
+2. create a service account
+
+kubectl apply -f https://raw.githubusercontent.com/aws-samples/amazon-cloudwatch-container-insights/latest/k8s-deployment-manifest-templates/deployment-mode/daemonset/container-insights-monitoring/cwagent/cwagent-serviceaccount.yaml
+
+
+3. create configmap
+
+curl -O https://raw.githubusercontent.com/aws-samples/amazon-cloudwatch-container-insights/latest/k8s-deployment-manifest-templates/deployment-mode/daemonset/container-insights-monitoring/cwagent/cwagent-configmap.yaml
+
+change the cluster name
+
+
+attach CloudWatchAgentServerPolicy policy to the ec2-node-group role
+4. deploy daemonset
+
+kubectl apply -f https://raw.githubusercontent.com/aws-samples/amazon-cloudwatch-container-insights/latest/k8s-deployment-manifest-templates/deployment-mode/daemonset/container-insights-monitoring/cwagent/cwagent-daemonset.yaml
+
+
+
+-------------------- aws eks and fluent bit -----------------
+
+1. create namespace
+
+kubectl apply -f https://raw.githubusercontent.com/aws-samples/amazon-cloudwatch-container-insights/latest/k8s-deployment-manifest-templates/deployment-mode/daemonset/container-insights-monitoring/cloudwatch-namespace.yaml
+
+2. create configmap
+
+ClusterName=my-cluster
+RegionName=eu-west-3
+FluentBitHttpPort='2020'
+FluentBitReadFromHead='Off'
+[[ ${FluentBitReadFromHead} = 'On' ]] && FluentBitReadFromTail='Off'|| FluentBitReadFromTail='On'
+[[ -z ${FluentBitHttpPort} ]] && FluentBitHttpServer='Off' || FluentBitHttpServer='On'
+kubectl create configmap fluent-bit-cluster-info \
+--from-literal=cluster.name=${ClusterName} \
+--from-literal=http.server=${FluentBitHttpServer} \
+--from-literal=http.port=${FluentBitHttpPort} \
+--from-literal=read.head=${FluentBitReadFromHead} \
+--from-literal=read.tail=${FluentBitReadFromTail} \
+--from-literal=logs.region=${RegionName} -n amazon-cloudwatch
+
+-------------- eks nlb --------------------
+
+for aws cloud provider load balancer legacy
+
+service.beta.kubernetes.io/aws-load-balancer-type:nlb
+
+
+
+------------------- k8s rollout ---------------------
+
+
+kubectl set image deployment/frontend www=image:v2               # Rolling update "www" containers of "frontend" deployment, updating the image
+kubectl rollout history deployment/frontend                      # Check the history of deployments including the revision
+kubectl rollout undo deployment/frontend                         # Rollback to the previous deployment
+kubectl rollout undo deployment/frontend --to-revision=2         # Rollback to a specific revision
+kubectl rollout status -w deployment/frontend                    # Watch rolling update status of "frontend" deployment until completion
+kubectl rollout restart deployment/frontend                      # Rolling restart of the "frontend" deployment
+
+
+
+---------------------------- aws eks istio ----------------------------------------
+
+echo 'export ISTIO_VERSION="1.10.0"' >> ${HOME}/.bash_profile
+source ${HOME}/.bash_profile
+
+curl -L https://istio.io/downloadIstio | ISTIO_VERSION=${ISTIO_VERSION} sh -
+
+cd ${PWD}/istio-${ISTIO_VERSION}
+sudo cp -v bin/istioctl /usr/local/bin/
+
+
+
+ yes | istioctl install --set profile=demo
+
+
+kubectl -n istio-system get svc
+
+
+kubectl create namespace bookinfo
+kubectl label namespace bookinfo istio-injection=enabled
+kubectl get ns bookinfo --show-labels
+
+
+
+
+
+
+---------------------------------- aws eks monitoring -------------------------------
+
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+helm repo update
+
+
+https://github.com/prometheus-operator/kube-prometheus
+for configuring AlertManager
+
+
+
+
+
+
